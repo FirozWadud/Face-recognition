@@ -1,3 +1,5 @@
+# its the Basic face recognition version
+
 import pickle
 import cv2
 import face_recognition

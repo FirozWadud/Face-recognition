@@ -1,4 +1,6 @@
+import cProfile
 import csv
+import os
 import threading
 import queue
 import pickle
@@ -7,6 +9,12 @@ import face_recognition
 import cvzone
 import numpy as np
 import time
+import cProfile
+import pstats
+
+# Start the profiler
+pr = cProfile.Profile()
+pr.enable()
 
 filename = 'Data/attendance.csv'
 
@@ -74,6 +82,18 @@ def show_info(info,faceDis):
 
     student_info = info
 
+    # get the path to the folder containing the images for the student
+    image = "Images_multi"
+    images_dir = os.path.join(image, student_info['id'])
+    # list all the images in the folder
+    image_files = os.listdir(images_dir)
+    # show the first image in the folder (if there are any)
+    if image_files:
+        image_path = os.path.join(images_dir, image_files[0])
+        imgStudent = cv2.imread(image_path)
+    cv2.imshow("Recognised Face", imgStudent)
+    cv2.waitKey(1)
+
     if student_info:
         print(f"Student ID: {student_info['id']}")
         print(f"Name: {student_info['name']}")
@@ -139,58 +159,59 @@ def process_frames():
             frame = frame_buffer.get()
 
             # Resize and convert to RGB
-            #imgS = frame
+            # imgS = frame
             imgS = cv2.resize(frame, (0, 0), None, 0.25, 0.25)
             imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)
 
             # Detect faces and encode
-            #faceCurFrame = face_recognition.face_locations(imgS, model="cnn")
+            # faceCurFrame = face_recognition.face_locations(imgS, model="cnn")
 
             faceCurFrame = face_recognition.face_locations(imgS)
             encodeCurFrame = face_recognition.face_encodings(imgS, faceCurFrame)
 
             # Check for matches and draw boxes
+            for faceLoc, faceEnc in zip(faceCurFrame, encodeCurFrame):
+                y1, x2, y2, x1 = [i * 4 for i in faceLoc]
+                #print (x1,y1,x2,y2)
+                bbox = x1, y1, x2 - x1, y2 - y1
+                # crop face
+                face_img = frame[y1-40:y2+40, x1-40:x2+40]
+                # show face in new window
+
+                cv2.imshow("Detected Face", face_img)
+                cv2.waitKey(1)
+
+                # recognize face
+                matches = face_recognition.compare_faces(encodeListKnown, faceEnc)
+                faceDis = face_recognition.face_distance(encodeListKnown, faceEnc)
+                # find best match
+                best_match_index = np.argmin(faceDis)
+                if matches[best_match_index]:
+                    student_id = studentIds[best_match_index]
+
+                    if student_id not in recognized_faces:
+                        recognized_faces.add(student_id)
+                        entry_time.add(time.time())
+                        student_info = fetch_info(student_id)
+                        update_time(student_id)
+                        show_info(student_info, faceDis[best_match_index])
+
+            # draw bounding box
             for faceLoc in faceCurFrame:
                 y1, x2, y2, x1 = [i * 4 for i in faceLoc]
                 bbox = x1, y1, x2 - x1, y2 - y1
-                frame = cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-                faceEncodings = face_recognition.face_encodings(imgS, [faceLoc])
-                for faceEncoding in faceEncodings:
-                    matches = face_recognition.compare_faces(encodeListKnown, faceEncoding, tolerance=0.6)
-                    faceDis = face_recognition.face_distance(encodeListKnown, faceEncoding)
+                frame = cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-                    if True in matches:
-                        matchIndex = np.argmin(faceDis)
-                        id = studentIds[matchIndex]
-                        #frame = cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                        update_time(id)
-                        if cv2.waitKey(1) == ord('r'):
-                            recognized_faces.clear()
-                        if id not in recognized_faces:
-                            recognized_faces.add(id)
-                            #entry_time =
-                            show_info(fetch_info(id), faceDis)
-
-                    else:
-                        pass
-                        #frame = cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            # Calculate and display FPS
+            frame_count += 1
+            elapsed_time = time.time() - start_time
+            fps = frame_count / elapsed_time
+            cv2.putText(frame, f"FPS: {fps:.2f}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
             # Display frame
-            cv2.imshow("Face Attendance", frame)
+            cv2.imshow("Frame", frame)
+            cv2.waitKey(1)
 
-            # Update FPS counter
-            frame_count += 1
-            if time.time() - start_time >= 1:
-                fps = frame_count / (time.time() - start_time)
-                print("FPS:", round(fps, 2))
-                frame_count = 0
-                start_time = time.time()
-
-            if cv2.waitKey(1) == ord('q'):
-                break
-
-    cv2.destroyAllWindows()
 
 # Create and start threads
 read_thread = threading.Thread(target=read_frames)
@@ -202,3 +223,10 @@ process_thread.start()
 # Wait for threads to finish
 read_thread.join()
 process_thread.join()
+
+# Stop the profiler
+pr.disable()
+
+# Print the profiling results
+ps = pstats.Stats(pr).sort_stats('tottime')
+ps.print_stats()
